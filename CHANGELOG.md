@@ -68,11 +68,11 @@
 - Sustain added.
 - stopAllNotes method updated to turn off sustain before stopping notes.
 
-## 3.1.8
-
-- Updated FluidSynth to 2.5.3 on Android.
-
 ## 3.1.7
 
 - Fixed audio playback not resuming after audio session interruptions on iOS/macOS (e.g., when returning from full-screen video ads).
 - Added automatic audio engine restart when audio session interruption ends.
+
+## 3.1.8
+
+- Updated FluidSynth to 2.5.3 on Android.
