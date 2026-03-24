@@ -8,12 +8,6 @@ cmake_minimum_required(VERSION 3.4.1)
 set(fluidsynth_DIR ${CMAKE_CURRENT_SOURCE_DIR}/fluidsynth)
 # Our code (native-lib.cpp) will be calling fluidsynth functions, so we add the fluidsynth binaries as dependencies of our code.
 
-add_library(libc++_shared SHARED IMPORTED)
-set_target_properties(libc++_shared PROPERTIES IMPORTED_LOCATION ${fluidsynth_DIR}/lib/${ANDROID_ABI}/libc++_shared.so)
-
-add_library(libomp SHARED IMPORTED)
-set_target_properties(libomp PROPERTIES IMPORTED_LOCATION ${fluidsynth_DIR}/lib/${ANDROID_ABI}/libomp.so)
-
 add_library(libFLAC SHARED IMPORTED)
 set_target_properties(libFLAC PROPERTIES IMPORTED_LOCATION ${fluidsynth_DIR}/lib/${ANDROID_ABI}/libFLAC.so)
 
@@ -77,8 +71,6 @@ target_include_directories(native-lib PRIVATE ${fluidsynth_DIR}/include)
 # Link everything alltogether. Notice that native-lib should be the first element in the list.
 target_link_libraries(
         native-lib
-        libomp
-        libc++_shared
         libFLAC
         libfluidsynth
         libfluidsynth-assetloader

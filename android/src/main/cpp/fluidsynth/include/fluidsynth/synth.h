@@ -334,7 +334,7 @@ FLUIDSYNTH_API int fluid_synth_tuning_dump(fluid_synth_t *synth, int bank, int p
  * but can also be used manually for custom processing of the rendered audio.
  *
  * @note Please note that all following functions block during rendering. If your goal is to
- * render real-time audio, ensure that you call these functions from a high-priority
+ * render realtime audio, ensure that you call these functions from a high-priority
  * thread with little to no other duties other than calling the rendering functions.
  *
  * @warning
@@ -344,7 +344,7 @@ FLUIDSYNTH_API int fluid_synth_tuning_dump(fluid_synth_t *synth, int bank, int p
  * synth with every call (cf. fluid_synth_get_internal_bufsize()), it will become evident when requesting larger sample chunks:
  * With larger sample chunks it will get harder for the synth to react on those spontaneously occurring events in time
  * (like events received from a MIDI driver, or directly made synth API calls).
- * In those real-time scenarios, prefer requesting smaller
+ * In those realtime scenarios, prefer requesting smaller
  * sample chunks from the synth with each call, to avoid poor quantization of your events in the synthesized audio.
  * This issue is not applicable when using the MIDI player or sequencer for event dispatching. Also
  * refer to the documentation of \setting{audio_period-size}.
@@ -538,6 +538,27 @@ FLUIDSYNTH_API int fluid_synth_set_breath_mode(fluid_synth_t *synth,
 FLUIDSYNTH_API int fluid_synth_get_breath_mode(fluid_synth_t *synth,
         int chan, int  *breathmode);
 /** @} Breath Mode */
+
+/** @name Portamento Time Mode
+ * @{
+ */
+
+/**
+ * Indicates the portamento time mode the synthesizer is set to
+ */
+enum fluid_portamento_time_mode
+{
+    FLUID_PORTAMENTO_TIME_MODE_AUTO,     /**< Auto mode - Start with 7-bit MSB, switch to 14-bit when LSB seen */
+    FLUID_PORTAMENTO_TIME_MODE_XG_GS,    /**< XG/GS mode - Always use 7-bit MSB only */
+    FLUID_PORTAMENTO_TIME_MODE_LINEAR,   /**< Linear mode - Always use 14-bit MSB+LSB */
+    FLUID_PORTAMENTO_TIME_MODE_LAST      /**< @internal Value defines the count of portamento time modes
+                                           @warning This symbol is not part of the public API and ABI
+                                           stability guarantee and may change at any time! */
+};
+
+FLUIDSYNTH_API int fluid_synth_set_portamento_time_mode(fluid_synth_t *synth, int mode);
+FLUIDSYNTH_API int fluid_synth_get_portamento_time_mode(fluid_synth_t *synth, int *mode);
+/** @} Portamento Time Mode */
 /** @} MIDI Channel Setup */
 
 
