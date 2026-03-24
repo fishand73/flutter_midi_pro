@@ -1,78 +1,32 @@
 import Flutter
-import CoreMIDI
-import AVFAudio
 import AVFoundation
-import CoreAudio
+import FluidSynth
 
 public class FlutterMidiProPlugin: NSObject, FlutterPlugin {
-  var audioEngines: [Int: [AVAudioEngine]] = [:]
-  var soundfontIndex = 1
-  var soundfontSamplers: [Int: [AVAudioUnitSampler]] = [:]
-  var soundfontURLs: [Int: URL] = [:]
-  
+  private var synths: [Int: OpaquePointer] = [:]
+  private var drivers: [Int: OpaquePointer] = [:]
+  private var settingsMap: [Int: OpaquePointer] = [:]
+  private var soundfonts: [Int: Int32] = [:]
+  private var nextSfId = 1
+
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "flutter_midi_pro", binaryMessenger: registrar.messenger())
     let instance = FlutterMidiProPlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)
   }
-  
+
   public override init() {
     super.init()
-    setupAudioSessionNotifications()
+    configureAudioSession()
   }
-  
-  deinit {
-    NotificationCenter.default.removeObserver(self)
-  }
-  
-  private func setupAudioSessionNotifications() {
-    NotificationCenter.default.addObserver(
-      self,
-      selector: #selector(handleAudioSessionInterruption),
-      name: AVAudioSession.interruptionNotification,
-      object: AVAudioSession.sharedInstance()
-    )
-  }
-  
-  @objc private func handleAudioSessionInterruption(notification: Notification) {
-    guard let userInfo = notification.userInfo,
-          let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
-          let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
-      return
-    }
-    
-    switch type {
-    case .began:
-      // Interruption began - audio engines will be stopped automatically by the system
-      break
-    case .ended:
-      // Interruption ended - restart all audio engines
-      // Check if we should resume (if option is present and true, or if option is missing)
-      var shouldResume = true
-      if let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt {
-        let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
-        shouldResume = options.contains(.shouldResume)
-      }
-      
-      if shouldResume {
-        restartAudioEngines()
-      }
-    @unknown default:
-      break
-    }
-  }
-  
-  private func restartAudioEngines() {
-    for (sfId, engines) in audioEngines {
-      for (index, engine) in engines.enumerated() {
-        if !engine.isRunning {
-          do {
-            try engine.start()
-          } catch {
-            print("Failed to restart audio engine for sfId \(sfId), channel \(index): \(error)")
-          }
-        }
-      }
+
+  private func configureAudioSession() {
+    let session = AVAudioSession.sharedInstance()
+    do {
+      try session.setCategory(.playback, mode: .default)
+      try session.setActive(true)
+    } catch {
+      print("Failed to configure audio session: \(error)")
     }
   }
 
@@ -83,130 +37,157 @@ public class FlutterMidiProPlugin: NSObject, FlutterPlugin {
         let path = args["path"] as! String
         let bank = args["bank"] as! Int
         let program = args["program"] as! Int
-        let url = URL(fileURLWithPath: path)
-        var chSamplers: [AVAudioUnitSampler] = []
-        var chAudioEngines: [AVAudioEngine] = []
-        for _ in 0...15 {
-            let sampler = AVAudioUnitSampler()
-            let audioEngine = AVAudioEngine()
-            audioEngine.attach(sampler)
-            audioEngine.connect(sampler, to: audioEngine.mainMixerNode, format:nil)
-            do {
-                try audioEngine.start()
-            } catch {
-                result(FlutterError(code: "AUDIO_ENGINE_START_FAILED", message: "Failed to start audio engine", details: nil))
-                return
-            }
-            do {
-                let isPercussion = (bank == 128)
-                let bankMSB: UInt8 = isPercussion ? UInt8(kAUSampler_DefaultPercussionBankMSB) : UInt8(kAUSampler_DefaultMelodicBankMSB)
-                let bankLSB: UInt8 = isPercussion ? 0 : UInt8(bank)
-                
-                try sampler.loadSoundBankInstrument(at: url, program: UInt8(program), bankMSB: bankMSB, bankLSB: bankLSB)
-            } catch {
-                result(FlutterError(code: "SOUND_FONT_LOAD_FAILED1", message: "Failed to load soundfont", details: nil))
-                return
-            }
-            chSamplers.append(sampler)
-            chAudioEngines.append(audioEngine)
-        }
-        soundfontSamplers[soundfontIndex] = chSamplers
-        soundfontURLs[soundfontIndex] = url
-        audioEngines[soundfontIndex] = chAudioEngines
-        soundfontIndex += 1
-        result(soundfontIndex-1)
-    case "stopAllNotes":
-        let args = call.arguments as! [String: Any]
-        let sfId = args["sfId"] as! Int
-        let soundfontSampler = soundfontSamplers[sfId]
-        if soundfontSampler == nil {
-            result(FlutterError(code: "SOUND_FONT_NOT_FOUND", message: "Soundfont not found", details: nil))
+
+        guard let settings = new_fluid_settings() else {
+            result(FlutterError(code: "SETTINGS_CREATE_FAILED", message: "Failed to create FluidSynth settings", details: nil))
             return
         }
-        soundfontSampler!.forEach { (sampler) in
-            // Sustain'i kapat (CC 64 -> 0) ve anında sesi kes (All Sound Off, CC 120 -> 0)
-            for channel in 0...15 {
-                sampler.sendController(64, withValue: 0, onChannel: UInt8(channel))
-                sampler.sendController(120, withValue: 0, onChannel: UInt8(channel))
-            }
-        }
-        result(nil)
-    case "controlChange":
-        let args = call.arguments as! [String: Any]
-        let sfId = args["sfId"] as! Int
-        let channel = args["channel"] as! Int
-        let controller = args["controller"] as! Int
-        let value = args["value"] as! Int
-        guard let sampler = soundfontSamplers[sfId]?[channel] else {
-            result(FlutterError(code: "SOUND_FONT_NOT_FOUND", message: "Soundfont/channel not found", details: nil))
+        fluid_settings_setnum(settings, "synth.gain", 1.0)
+        fluid_settings_setint(settings, "audio.period-size", 64)
+        fluid_settings_setint(settings, "audio.periods", 4)
+        fluid_settings_setint(settings, "audio.realtime-prio", 99)
+        fluid_settings_setnum(settings, "synth.sample-rate", 44100.0)
+        fluid_settings_setint(settings, "synth.polyphony", 32)
+
+        guard let synth = new_fluid_synth(settings) else {
+            delete_fluid_settings(settings)
+            result(FlutterError(code: "SYNTH_CREATE_FAILED", message: "Failed to create FluidSynth synth", details: nil))
             return
         }
-        sampler.sendController(UInt8(controller), withValue: UInt8(value), onChannel: UInt8(channel))
-        result(nil)
+
+        let sfId = fluid_synth_sfload(synth, path, 0)
+        if sfId == FLUID_FAILED {
+            delete_fluid_synth(synth)
+            delete_fluid_settings(settings)
+            result(FlutterError(code: "SOUND_FONT_LOAD_FAILED", message: "Failed to load soundfont", details: nil))
+            return
+        }
+
+        for i: Int32 in 0..<16 {
+            fluid_synth_program_select(synth, i, sfId, Int32(bank), Int32(program))
+        }
+
+        guard let driver = new_fluid_audio_driver(settings, synth) else {
+            delete_fluid_synth(synth)
+            delete_fluid_settings(settings)
+            result(FlutterError(code: "AUDIO_DRIVER_CREATE_FAILED", message: "Failed to create audio driver", details: nil))
+            return
+        }
+
+        let currentId = nextSfId
+        synths[currentId] = synth
+        drivers[currentId] = driver
+        settingsMap[currentId] = settings
+        soundfonts[currentId] = sfId
+        nextSfId += 1
+        result(currentId)
+
     case "selectInstrument":
         let args = call.arguments as! [String: Any]
         let sfId = args["sfId"] as! Int
         let channel = args["channel"] as! Int
         let bank = args["bank"] as! Int
         let program = args["program"] as! Int
-        let soundfontSampler = soundfontSamplers[sfId]![channel]
-        let soundfontUrl = soundfontURLs[sfId]!
-        do {
-            let isPercussion = (bank == 128)
-            let bankMSB: UInt8 = isPercussion ? UInt8(kAUSampler_DefaultPercussionBankMSB) : UInt8(kAUSampler_DefaultMelodicBankMSB)
-            let bankLSB: UInt8 = isPercussion ? 0 : UInt8(bank)
-            
-            try soundfontSampler.loadSoundBankInstrument(at: soundfontUrl, program: UInt8(program), bankMSB: bankMSB, bankLSB: bankLSB)
-        } catch {
-            result(FlutterError(code: "SOUND_FONT_LOAD_FAILED2", message: "Failed to load soundfont", details: nil))
-            return
-        }
-        soundfontSampler.sendProgramChange(UInt8(program), bankMSB: UInt8(kAUSampler_DefaultMelodicBankMSB), bankLSB: UInt8(bank), onChannel: UInt8(channel))
-        result(nil)
-    case "playNote":
-        let args = call.arguments as! [String: Any]
-        let channel = args["channel"] as! Int
-        let note = args["key"] as! Int
-        let velocity = args["velocity"] as! Int
-        let sfId = args["sfId"] as! Int
-        let soundfontSampler = soundfontSamplers[sfId]![channel]
-        soundfontSampler.startNote(UInt8(note), withVelocity: UInt8(velocity), onChannel: UInt8(channel))
-        result(nil)
-    case "stopNote":
-        let args = call.arguments as! [String: Any]
-        let channel = args["channel"] as! Int
-        let note = args["key"] as! Int
-        let sfId = args["sfId"] as! Int
-        let soundfontSampler = soundfontSamplers[sfId]![channel]
-        soundfontSampler.stopNote(UInt8(note), onChannel: UInt8(channel))
-        result(nil)
-    case "unloadSoundfont":
-        let args = call.arguments as! [String:Any]
-        let sfId = args["sfId"] as! Int
-        let soundfontSampler = soundfontSamplers[sfId]
-        if soundfontSampler == nil {
+        guard let synth = synths[sfId], let fontId = soundfonts[sfId] else {
             result(FlutterError(code: "SOUND_FONT_NOT_FOUND", message: "Soundfont not found", details: nil))
             return
         }
-        audioEngines[sfId]?.forEach { (audioEngine) in
-            audioEngine.stop()
-        }
-        audioEngines.removeValue(forKey: sfId)
-        soundfontSamplers.removeValue(forKey: sfId)
-        soundfontURLs.removeValue(forKey: sfId)
+        fluid_synth_program_select(synth, Int32(channel), fontId, Int32(bank), Int32(program))
         result(nil)
+
+    case "playNote":
+        let args = call.arguments as! [String: Any]
+        let channel = args["channel"] as! Int
+        let key = args["key"] as! Int
+        let velocity = args["velocity"] as! Int
+        let sfId = args["sfId"] as! Int
+        guard let synth = synths[sfId] else {
+            result(FlutterError(code: "SOUND_FONT_NOT_FOUND", message: "Soundfont not found", details: nil))
+            return
+        }
+        fluid_synth_noteon(synth, Int32(channel), Int32(key), Int32(velocity))
+        result(nil)
+
+    case "stopNote":
+        let args = call.arguments as! [String: Any]
+        let channel = args["channel"] as! Int
+        let key = args["key"] as! Int
+        let sfId = args["sfId"] as! Int
+        guard let synth = synths[sfId] else {
+            result(FlutterError(code: "SOUND_FONT_NOT_FOUND", message: "Soundfont not found", details: nil))
+            return
+        }
+        fluid_synth_noteoff(synth, Int32(channel), Int32(key))
+        result(nil)
+
+    case "stopAllNotes":
+        let args = call.arguments as! [String: Any]
+        let sfId = args["sfId"] as! Int
+        guard let synth = synths[sfId] else {
+            result(FlutterError(code: "SOUND_FONT_NOT_FOUND", message: "Soundfont not found", details: nil))
+            return
+        }
+        for ch: Int32 in 0..<16 {
+            fluid_synth_cc(synth, ch, 64, 0)
+            fluid_synth_all_sounds_off(synth, ch)
+        }
+        result(nil)
+
+    case "controlChange":
+        let args = call.arguments as! [String: Any]
+        let sfId = args["sfId"] as! Int
+        let channel = args["channel"] as! Int
+        let controller = args["controller"] as! Int
+        let value = args["value"] as! Int
+        guard let synth = synths[sfId] else {
+            result(FlutterError(code: "SOUND_FONT_NOT_FOUND", message: "Soundfont not found", details: nil))
+            return
+        }
+        fluid_synth_cc(synth, Int32(channel), Int32(controller), Int32(value))
+        result(nil)
+
+    case "unloadSoundfont":
+        let args = call.arguments as! [String: Any]
+        let sfId = args["sfId"] as! Int
+        guard synths[sfId] != nil else {
+            result(FlutterError(code: "SOUND_FONT_NOT_FOUND", message: "Soundfont not found", details: nil))
+            return
+        }
+        if let driver = drivers[sfId] {
+            delete_fluid_audio_driver(driver)
+        }
+        if let synth = synths[sfId] {
+            delete_fluid_synth(synth)
+        }
+        if let settings = settingsMap[sfId] {
+            delete_fluid_settings(settings)
+        }
+        synths.removeValue(forKey: sfId)
+        drivers.removeValue(forKey: sfId)
+        settingsMap.removeValue(forKey: sfId)
+        soundfonts.removeValue(forKey: sfId)
+        result(nil)
+
     case "dispose":
-        audioEngines.forEach { (key, value) in
-            value.forEach { (audioEngine) in
-                audioEngine.stop()
+        for (id, _) in synths {
+            if let driver = drivers[id] {
+                delete_fluid_audio_driver(driver)
+            }
+            if let synth = synths[id] {
+                delete_fluid_synth(synth)
+            }
+            if let settings = settingsMap[id] {
+                delete_fluid_settings(settings)
             }
         }
-        audioEngines = [:]
-        soundfontSamplers = [:]
+        synths.removeAll()
+        drivers.removeAll()
+        settingsMap.removeAll()
+        soundfonts.removeAll()
         result(nil)
+
     default:
-      result(FlutterMethodNotImplemented)
-        break
+        result(FlutterMethodNotImplemented)
     }
   }
 }

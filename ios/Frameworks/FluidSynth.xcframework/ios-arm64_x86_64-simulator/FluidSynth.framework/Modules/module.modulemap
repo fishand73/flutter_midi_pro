@@ -1,0 +1,5 @@
+framework module FluidSynth {
+  umbrella header "fluidsynth.h"
+  export *
+  module * { export * }
+}
