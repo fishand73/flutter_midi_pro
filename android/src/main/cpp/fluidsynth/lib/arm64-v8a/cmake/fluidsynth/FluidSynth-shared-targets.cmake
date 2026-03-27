@@ -59,7 +59,7 @@ endif()
 add_library(FluidSynth::libfluidsynth-OBJ INTERFACE IMPORTED)
 
 set_target_properties(FluidSynth::libfluidsynth-OBJ PROPERTIES
-  INTERFACE_LINK_LIBRARIES "Threads::Threads;log;GLib2::glib-2;GLib2::gthread-2;SndFile::sndfile;InstPatch::libinstpatch;oboe::oboe;OpenSLES::OpenSLES"
+  INTERFACE_LINK_LIBRARIES "m;Threads::Threads;log;GLib2::glib-2;GLib2::gthread-2;SndFile::sndfile;oboe::oboe;OpenSLES::OpenSLES"
 )
 
 # Create imported target FluidSynth::fluidsynth
@@ -73,7 +73,7 @@ set_target_properties(FluidSynth::libfluidsynth PROPERTIES
 )
 
 # Load information for each installed configuration.
-file(GLOB _cmake_config_files "${CMAKE_CURRENT_LIST_DIR}/FluidSynthTargets-*.cmake")
+file(GLOB _cmake_config_files "${CMAKE_CURRENT_LIST_DIR}/FluidSynth-shared-targets-*.cmake")
 foreach(_cmake_config_file IN LISTS _cmake_config_files)
   include("${_cmake_config_file}")
 endforeach()
